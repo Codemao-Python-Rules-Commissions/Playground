@@ -108,6 +108,7 @@ export async function pull_request(
       issue_number: pr_number,
     })
   ).data.map((label) => label.name);
+  console.log(action)
   switch (action) {
     case "synchronize":
       labelToRemove.push("Administrator-Approved");
