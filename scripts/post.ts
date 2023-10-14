@@ -180,7 +180,6 @@ export async function pull_request(
     labelToRemove: labelToRemove,
   };
 }
-
 (async () => {
   const { eventName } = context;
   switch (eventName) {
