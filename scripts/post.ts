@@ -186,7 +186,7 @@ export async function pull_request(
   switch (eventName) {
     case "pull_request_target":
       const result = await pull_request(
-        context.payload.sender.type,
+        context.payload.action,
         context.repo.repo,
         context.repo.owner,
         context.payload.pull_request.number,
