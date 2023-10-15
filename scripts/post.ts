@@ -283,7 +283,7 @@ export async function pull_request_target(
       );
       await approved(context.payload.pull_request.number, context.repo.owner, context.repo.repo)
       break;
-    case "":
+    case "issue_comment":
       await pull_request_review_comment(
         context.payload.action,
         context.repo.repo,
