@@ -288,7 +288,7 @@ export async function pull_request_target(
         context.payload.action,
         context.repo.repo,
         context.repo.owner,
-        context.payload.issue.number | context.payload.pull_request.number,
+        context.payload.issue?.number | context.payload.pull_request?.number,
         context.payload.comment.id,
       );
   }
