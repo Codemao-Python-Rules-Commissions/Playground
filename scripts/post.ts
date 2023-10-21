@@ -1,59 +1,93 @@
 import { context } from "@actions/github";
 import { Octokit } from "@octokit/rest";
 import { env } from "node:process";
+import * as data from "./data";
+
+type EventName = "issue_comment" | "pull_request_target";
+type Issue_Comment = "created" | "deleted" | "edited";
+type Pull_Request_Target =
+  | "assigned"
+  | "unassigned"
+  | "labeled"
+  | "unlabeled"
+  | "opened"
+  | "closed"
+  | "reopened"
+  | "synchronize"
+  | "converted_to_draft"
+  | "ready_for_review"
+  | "locked"
+  | "unlocked"
+  | "review_requested"
+  | "review_request_removed"
+  | "auto_merge_enabled"
+  | "auto_merge_disabled"
+  | "edited";
+
+interface Special_operate {
+  [Key: string]: {
+    regex: RegExp;
+    conditions: EventName[];
+    permission: data.permissions;
+    operate: (number: number, owner: string, repo: string) => Promise<any>;
+  };
+}
 
 const api = new Octokit({
   auth: env.POST_TOKEN,
 });
-const Administrator = [
-  "coolplaylin",
-  "coolplaylinbot",
-  "jsrcode",
-  "liulyxandy-codemao",
-  "fufu3939",
-];
-const Member = [
-  "quiet-star-gazing",
-  "pangguanzhejers",
-  "QiKeZhiCao",
-  "svipwing",
-  "DIAG5",
-  "CHEN-EXE",
-];
-const Labels = [
-  "Administrator-Approved",
-  "Announcement",
-  "Blocking-issue",
-  "Breaking-Change",
-  "bug",
-  "Command-Execute",
-  "Commissions",
-  "Commissions-Member",
-  "Commissions-Policy",
-  "dependency",
-  "Do-Not-Merge",
-  "documentation",
-  "duplicate",
-  "enhancement",
-  "good first issue",
-  "help wanted",
-  "invalid",
-  "Member-Adding",
-  "Member-Approved",
-  "Merge-Needed",
-  "Needs-All-Approval",
-  "Needs-Author-Feedback",
-  "Needs-Modify",
-  "Needs-Triage",
-  "Policy-Accepted",
-  "Policy-Modify",
-  "Policy-Rejected",
-  "Policy-Remove",
-  "Policy-Request",
-  "Project-File",
-];
 
-export async function pull_request_review_comment(
+const special_operate: Special_operate = {
+  close_issue_pr: {
+    regex: /[Cc]lose[\s-][Ww]ith[\s-][Rr]eason:/,
+    conditions: ["issue_comment"],
+    permission: 0,
+    operate: async (number: number, owner: string, repo: string) => {
+      return await api.rest.issues.update({
+        repo: repo,
+        owner: owner,
+        issue_number: number,
+        state: "closed",
+      });
+    },
+  },
+};
+
+export async function approved(pr_number: number, owner: string, repo: string) {
+  const labelToAdd: string[] = [];
+  const reviews = (
+    await api.rest.pulls.listReviews({
+      owner: owner,
+      repo: repo,
+      pull_number: pr_number,
+    })
+  ).data;
+  reviews.forEach((review) => {
+    switch (review.state) {
+      case "APPROVED":
+        data.members.forEach((member) => {
+          if (member.permission >= 1 && review.user.login === member.login) {
+            labelToAdd.push("Administrator-Approved");
+          }
+          if (member.permission === 0 && review.user.login === member.login) {
+            labelToAdd.push("Member-Approved");
+          }
+        });
+        break;
+    }
+  });
+  // Apply Changes
+  if (labelToAdd.length > 0) {
+    await api.rest.issues.addLabels({
+      owner: owner,
+      repo: repo,
+      issue_number: pr_number,
+      labels: labelToAdd,
+    });
+  }
+}
+
+export async function issue_comment(
   action: string,
   repo: string,
   owner: string,
@@ -62,6 +96,7 @@ export async function pull_request_review_comment(
 ) {
   const labelToRemove: string[] = [];
   const labelToAdd: string[] = [];
+  const eventName = context.eventName as EventName;
   let labels = (
     await api.rest.issues.listLabelsOnIssue({
       repo: repo,
@@ -69,23 +104,81 @@ export async function pull_request_review_comment(
       issue_number: pr_number,
     })
   ).data.map((label) => label.name);
-  switch (action) {
+  let res = (
+    await api.rest.issues.getComment({
+      repo: repo,
+      owner: owner,
+      comment_id: comment_id,
+    })
+  ).data;
+  switch (action as Issue_Comment) {
     case "created":
-      const review = await api.rest.pulls.getReview({
-        repo: repo,
-        owner: owner,
-        pull_number: pr_number,
-        review_id: comment_id,
+      Object.keys(data.labels_regex_add).forEach((key) => {
+        if (
+          res.body.match(data.labels_regex_add[key].regex) &&
+          data.members.filter((obj) => {
+            if (
+              obj.login === res.user.login &&
+              obj.permission >= data.labels_regex_remove[key].permission
+            ) {
+              return true;
+            }
+          })
+        ) {
+          labelToAdd.push(key);
+        }
       });
-      switch (review.data.state) {
-        case "approved":
-          if (Administrator.includes(review.data.user.login)) {
-            labelToAdd.push("Administrator-Approved");
-          } else if (Member.includes(review.data.user.login)) {
-            labelToAdd.push("Member-Approved");
-          }
-          break;
-      }
+      Object.keys(data.labels_regex_remove).forEach((key) => {
+        if (
+          res.body.match(data.labels_regex_remove[key].regex) &&
+          data.members.filter((obj) => {
+            if (
+              obj.login === res.user.login &&
+              obj.permission >= data.labels_regex_remove[key].permission
+            ) {
+              return true;
+            }
+          })
+        ) {
+          labelToRemove.push(key);
+        }
+      });
+      Object.values(special_operate).forEach(async (value) => {
+        if (
+          res.body.match(value.regex) &&
+          value.conditions.includes(eventName) &&
+          data.members.filter((obj) => {
+            if (
+              obj.login === res.user.login &&
+              obj.permission >= value.permission
+            ) {
+              return true;
+            }
+          })
+        ) {
+          await value.operate(pr_number, owner, repo);
+        }
+      });
+  }
+
+  // Apply Changes
+  if (labelToAdd.length > 0) {
+    await api.rest.issues.addLabels({
+      owner: owner,
+      repo: repo,
+      issue_number: pr_number,
+      labels: labelToAdd,
+    });
+  }
+  for (let label of labelToRemove) {
+    if (labels.includes(label)) {
+      await api.rest.issues.removeLabel({
+        owner: owner,
+        repo: repo,
+        issue_number: pr_number,
+        name: label,
+      });
+    }
   }
   return {
     labelToAdd: labelToAdd,
@@ -93,7 +186,7 @@ export async function pull_request_review_comment(
   };
 }
 
-export async function pull_request(
+export async function pull_request_target(
   action: string,
   repo: string,
   owner: string,
@@ -108,8 +201,7 @@ export async function pull_request(
       issue_number: pr_number,
     })
   ).data.map((label) => label.name);
-  console.log(action)
-  switch (action) {
+  switch (action as Pull_Request_Target) {
     case "synchronize":
       labelToRemove.push("Administrator-Approved");
       labelToRemove.push("Member-Approved");
@@ -183,17 +275,28 @@ export async function pull_request(
 }
 
 (async () => {
-  const { eventName } = context;
+  const eventName = context.eventName as EventName;
   switch (eventName) {
     case "pull_request_target":
-      const result = await pull_request(
+      await pull_request_target(
         context.payload.action,
         context.repo.repo,
         context.repo.owner,
         context.payload.pull_request.number,
       );
-      console.log("Post Overview");
-      console.log(`Labels have added: ${result.labelToAdd.toString()}`);
-      console.log(`Labels have removed: ${result.labelToRemove.toString()}`);
+      await approved(
+        context.payload.pull_request.number,
+        context.repo.owner,
+        context.repo.repo,
+      );
+      break;
+    case "issue_comment":
+      await issue_comment(
+        context.payload.action,
+        context.repo.repo,
+        context.repo.owner,
+        context.payload.pull_request?.number | context.payload.issue?.number,
+        context.payload.comment.id,
+      );
   }
 })();
